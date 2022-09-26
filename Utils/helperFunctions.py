@@ -149,17 +149,4 @@ def save_as_json(obj, filename, destination):
     with open(os.path.join(destination, filename), "w+") as fh:
         json.dump(obj, fh)
 
-def dense_to_sparse(list_of_values :list, mapper: dict):
-    columns = list(mapper.values())
-    result = np.zeros((len(list_of_values), len(columns)))
-
-    for row, value in enumerate(list_of_values):
-        col = columns.index(mapper[value])
-        result[row, col] = 1
-
-    return pd.Dataframe(result, columns)
-
-
-
-
 
