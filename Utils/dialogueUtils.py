@@ -104,3 +104,26 @@ def preview_dialogues(df, n=4):
     for i in range(n):
         print(df['dialogue'].iloc[i])
         print("------------------------------")
+
+def parse_dialogue(dialogue:str) -> str:
+    speakers = set()
+    for entry in dialogue:
+        speaker = entry['speaker']
+        speakers.add(speaker)
+  
+    if len(speakers) != 2:
+        return ""
+    
+    speaker1, speaker2 = list(speakers)
+    if (speaker1 != dialogue[0]['speaker']):
+        speaker1, speaker2 = speaker2, speaker1
+
+    mapper = {speaker1:"#Person1#:", speaker2:"#Person2#:"}
+
+    output = []
+    for entry in dialogue:
+        speaker = entry['speaker']
+        turn = mapper[speaker] + entry['text']
+        output.append(turn)
+
+    return '\n'.join(output)
