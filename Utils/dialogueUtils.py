@@ -99,3 +99,8 @@ def get_classification_from_history(path_to_history, df, dtype='U60'):
         topics[classified_from_history] = classified_from_history_values
 
     return topics, history
+
+def preview_dialogues(df, n=4):
+    for i in range(n):
+        print(df['dialogue'].iloc[i])
+        print("------------------------------")
