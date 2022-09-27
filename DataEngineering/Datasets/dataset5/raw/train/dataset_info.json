@@ -1,0 +1,90 @@
+{
+  "builder_name": "empathetic_dialogues",
+  "citation": "@inproceedings{rashkin2019towards,\n  title = {Towards Empathetic Open-domain Conversation Models: a New Benchmark and Dataset},\n  author = {Hannah Rashkin and Eric Michael Smith and Margaret Li and Y-Lan Boureau},\n  booktitle = {ACL},\n  year = {2019},\n}\n",
+  "config_name": "default",
+  "dataset_size": 25017137,
+  "description": "PyTorch original implementation of Towards Empathetic Open-domain Conversation Models: a New Benchmark and Dataset\n",
+  "download_checksums": {
+    "https://dl.fbaipublicfiles.com/parlai/empatheticdialogues/empatheticdialogues.tar.gz": {
+      "num_bytes": 28022709,
+      "checksum": "56f234d77b7dd1f005fd365bb17769cfe346c3c84295b69bc069c8ccb83be03d"
+    }
+  },
+  "download_size": 28022709,
+  "features": {
+    "conv_id": {
+      "dtype": "string",
+      "id": null,
+      "_type": "Value"
+    },
+    "utterance_idx": {
+      "dtype": "int32",
+      "id": null,
+      "_type": "Value"
+    },
+    "context": {
+      "dtype": "string",
+      "id": null,
+      "_type": "Value"
+    },
+    "prompt": {
+      "dtype": "string",
+      "id": null,
+      "_type": "Value"
+    },
+    "speaker_idx": {
+      "dtype": "int32",
+      "id": null,
+      "_type": "Value"
+    },
+    "utterance": {
+      "dtype": "string",
+      "id": null,
+      "_type": "Value"
+    },
+    "selfeval": {
+      "dtype": "string",
+      "id": null,
+      "_type": "Value"
+    },
+    "tags": {
+      "dtype": "string",
+      "id": null,
+      "_type": "Value"
+    }
+  },
+  "homepage": "https://github.com/facebookresearch/EmpatheticDialogues",
+  "license": "",
+  "post_processed": null,
+  "post_processing_size": null,
+  "size_in_bytes": 53039846,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 18954220,
+      "num_examples": 76673,
+      "dataset_name": "empathetic_dialogues"
+    },
+    "validation": {
+      "name": "validation",
+      "num_bytes": 3063921,
+      "num_examples": 12030,
+      "dataset_name": "empathetic_dialogues"
+    },
+    "test": {
+      "name": "test",
+      "num_bytes": 2998996,
+      "num_examples": 10943,
+      "dataset_name": "empathetic_dialogues"
+    }
+  },
+  "supervised_keys": null,
+  "task_templates": null,
+  "version": {
+    "version_str": "0.1.0",
+    "description": null,
+    "major": 0,
+    "minor": 1,
+    "patch": 0
+  }
+}
