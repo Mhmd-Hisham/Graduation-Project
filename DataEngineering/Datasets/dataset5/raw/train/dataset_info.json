@@ -2,7 +2,7 @@
   "builder_name": "empathetic_dialogues",
   "citation": "@inproceedings{rashkin2019towards,\n  title = {Towards Empathetic Open-domain Conversation Models: a New Benchmark and Dataset},\n  author = {Hannah Rashkin and Eric Michael Smith and Margaret Li and Y-Lan Boureau},\n  booktitle = {ACL},\n  year = {2019},\n}\n",
   "config_name": "default",
-  "dataset_size": 25017137,
+  "dataset_size": 25042339,
   "description": "PyTorch original implementation of Towards Empathetic Open-domain Conversation Models: a New Benchmark and Dataset\n",
   "download_checksums": {
     "https://dl.fbaipublicfiles.com/parlai/empatheticdialogues/empatheticdialogues.tar.gz": {
@@ -57,23 +57,23 @@
   "license": "",
   "post_processed": null,
   "post_processing_size": null,
-  "size_in_bytes": 53039846,
+  "size_in_bytes": 53065048,
   "splits": {
     "train": {
       "name": "train",
-      "num_bytes": 18954220,
+      "num_bytes": 18973582,
       "num_examples": 76673,
       "dataset_name": "empathetic_dialogues"
     },
     "validation": {
       "name": "validation",
-      "num_bytes": 3063921,
+      "num_bytes": 3066977,
       "num_examples": 12030,
       "dataset_name": "empathetic_dialogues"
     },
     "test": {
       "name": "test",
-      "num_bytes": 2998996,
+      "num_bytes": 3001780,
       "num_examples": 10943,
       "dataset_name": "empathetic_dialogues"
     }
