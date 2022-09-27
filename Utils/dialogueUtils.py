@@ -1,6 +1,8 @@
 import os
+from typing import List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 import Utils.helperFunctions as helperFunctions
 
 get_max_category = lambda d: list(sorted(d.items(), reverse=True))[0][0]
@@ -105,11 +107,10 @@ def preview_dialogues(df, n=4):
         print(df['dialogue'].iloc[i])
         print("------------------------------")
 
-def parse_dialogue(dialogue:str) -> str:
+def parse_dialogue(dialogue:str, sentence_key: str='text') -> str:
     speakers = set()
     for entry in dialogue:
-        speaker = entry['speaker']
-        speakers.add(speaker)
+        speakers.add(entry['speaker'])
   
     if len(speakers) != 2:
         return ""
@@ -123,7 +124,49 @@ def parse_dialogue(dialogue:str) -> str:
     output = []
     for entry in dialogue:
         speaker = entry['speaker']
-        turn = mapper[speaker] + entry['text']
+        turn = mapper[speaker] + entry[sentence_key]
         output.append(turn)
 
     return '\n'.join(output)
+
+class DialogueDataset:
+    """
+        A base class for all the dialogue datasets in the project.
+    """
+    def __init__(self, dataset_name: str, dataset_src_url: str, order: int):
+        self.dataset_name = dataset_name
+        self.dataset_src_url = dataset_src_url
+        self.order = order
+    
+    def download(self, dest: str) -> List[str]:
+        raise NotImplementedError
+    
+    def preprocess(self, files: List[str]) -> pd.DataFrame:
+        raise NotImplementedError
+    
+    def get_dataset(self, dest:str, save_index: bool=False) -> Tuple[pd.DataFrame, dict]:
+        files = self.download(dest)
+        df = self.preprocess(files)
+        info_dict = self.save(df, dest, save_index)
+
+        return df, info_dict
+    
+    def save(self, df: pd.DataFrame, dest: str, save_index: bool=False) -> dict:
+        """
+            Saves the given pre-processed dataframe of the dataset along with the information dictionary
+        """
+        dest = os.path.join(dest, 'preprocessed')
+        os.makedirs(dest, exist_ok=True)
+
+        df.to_csv(os.path.join(dest, f"df{self.order}.csv"), index=save_index)
+
+        info_dict = {
+            "name": self.dataset_name,
+            "source": self.dataset_src_url,
+            "order": self.order
+        }
+
+        helperFunctions.save_as_json(info_dict, f"info{self.order}.json", dest)
+
+        return info_dict
+    
