@@ -3,9 +3,10 @@ import json
 import zipfile
 import functools
 
-import requests
-import pandas as pd
+from IPython.display import display
 import numpy as np
+import pandas as pd
+import requests
 
 print = functools.partial(print, flush=True)
 
@@ -150,3 +151,17 @@ def save_as_json(obj, filename, destination):
         json.dump(obj, fh)
 
 
+def pprint_df(df, columns=None):
+    """
+        Pretty print a dataframe in a jupyter notebook.
+        Re-formats numbers in each column and adds a prefix (K, M, B) to make it easier to read large numbers.
+    """
+    formatter = lambda v: int(v) if v < 1e3 else \
+                          f"{v//1e3:,.0f}K" if v < 1e6 else \
+                          f"{v/1e6:,.2f}M" if v < 1e9 else \
+                          f"{v/1e9:,.2f}B"
+    df = df.copy()
+    columns = columns if columns else df.columns
+    for col in columns:
+        df[col] = df[col].apply(formatter)
+    display(df)
