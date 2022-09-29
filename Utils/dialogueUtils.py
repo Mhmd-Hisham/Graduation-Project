@@ -1,3 +1,5 @@
+
+import re
 import os
 import random
 from typing import List, Optional, Tuple, Dict
@@ -131,6 +133,11 @@ def parse_dialogue(dialogue:str, sentence_key: str='text') -> str:
         output.append(turn)
 
     return '\n'.join(output)
+
+def remove_speaker_prefix(dialogue: str) -> str:
+    # removes "#Person1#: ", "#Person2#: ",
+    #         "#Person1#:",  "#Person2#:"
+    return re.sub('(\#Person[1|2]\#\:\s*)', "", dialogue)
 
 class DialogueDataset:
     """
