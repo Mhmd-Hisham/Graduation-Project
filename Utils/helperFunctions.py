@@ -2,6 +2,7 @@ import os
 import json
 import zipfile
 import functools
+from typing import Union, List, Dict, Tuple
 
 from IPython.display import display
 import numpy as np
@@ -150,7 +151,6 @@ def save_as_json(obj, filename, destination):
     with open(os.path.join(destination, filename), "w+") as fh:
         json.dump(obj, fh)
 
-
 def pprint_df(df, columns=None):
     """
         Pretty print a dataframe in a jupyter notebook.
@@ -165,3 +165,30 @@ def pprint_df(df, columns=None):
     for col in columns:
         df[col] = df[col].apply(formatter)
     display(df)
+
+def remove_outliers(obj: Union[pd.DataFrame, pd.Series, np.array], column: str=None, std_range: float=3):
+    """
+        Removes outliers from the given series/dataframe using the z-score method.
+
+        Parameters
+        ----------
+        obj : the object you want to remove outliers from. Could be a Pandas series, dataframe, or a numpy array.
+        std_range: how many standard deviations should the points be from the mean. Non-outliers: -std_range < x < std_range
+        column: Specifies the numerical column to compute the z-score upon. Only needed when obj is a dataframe.
+
+        Returns
+        -------
+        Returns a boolean numpy array (mask) with outliers set to False.
+    """
+    array = None
+    if isinstance(obj, pd.DataFrame):
+        array = np.array(obj[column])
+
+    elif isinstance(obj, pd.Series):
+        array = np.array(obj.values)
+
+    mu = np.mean(array)
+    sigma = np.std(array)
+    z_score = (array - mu)/sigma
+
+    return (-std_range < z_score)&(z_score < std_range)
