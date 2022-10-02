@@ -151,20 +151,58 @@ def save_as_json(obj, filename, destination):
     with open(os.path.join(destination, filename), "w+") as fh:
         json.dump(obj, fh)
 
-def pprint_df(df, columns=None):
+def format_number(number: float) -> str:
     """
-        Pretty print a dataframe in a jupyter notebook.
-        Re-formats numbers in each column and adds a prefix (K, M, B) to make it easier to read large numbers.
+        Formats numbers in a nice presentable way.
+        Mainly adds a K, M, or B prefix to large numbers.
+
+        Parameters
+        ----------
+        number: the number you want to format.
+
+        Returns
+        -------
+        A string containing the formatted number.
     """
     formatter = lambda v: int(v) if v < 1e3 else \
                           f"{v//1e3:,.0f}K" if v < 1e6 else \
                           f"{v/1e6:,.2f}M" if v < 1e9 else \
                           f"{v/1e9:,.2f}B"
+    
+    return formatter(number)
+
+def pprint_df(df: pd.DataFrame, columns: List[str]=None, display: bool=False) -> pd.DataFrame:
+    """
+        Pretty print a dataframe in a jupyter notebook.
+        Re-formats numbers in each column and adds a prefix (K, M, B) to make it easier to read large numbers.
+
+        Parameters
+        ----------
+        df : the pandas Dataframe you want to print prettily.
+        columns : the list of 'numeric' columns you want print nicely. Uses all numeric columns if no columns were provided.
+        display : whether to display the dataframe on Jupter or not
+
+        Returns
+        -------
+        Returns a copy of the dataframe formatted nicely. The numeric columns will be converted to str columns.
+    """
+
+    # make a copy of the dataframe
     df = df.copy()
-    columns = columns if columns else df.columns
+
+    # select numeric columns if no columns were provided
+    columns = columns if columns else df.select_dtypes([np.number]).columns
+
+    # format the columns
     for col in columns:
-        df[col] = df[col].apply(formatter)
-    display(df)
+        df[col] = df[col].apply(format_number)
+
+    # display in Jupyter
+    if display:
+        display(df)
+
+    # return the formatted dataframe
+    return df
 
 def remove_outliers(obj: Union[pd.DataFrame, pd.Series, np.array], column: str=None, std_range: float=3):
     """
