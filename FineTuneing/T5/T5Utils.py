@@ -2,67 +2,65 @@
 #@markdown Importing modules
 
 import os
+import gc
 import glob
+import json
 import shutil
+import random
 import multiprocessing
 from typing import List, Tuple, Dict, Callable
 
-# to show the full dialogues in the dataframes
-import pandas as pd
-
-import torch
 import numpy as np
-
-from transformers import (
-    T5ForConditionalGeneration,
-    PreTrainedTokenizer,
-    T5TokenizerFast as T5Tokenizer,
-)
-
-from torch.optim import AdamW
-from torch.utils.data import Dataset, DataLoader
-
+import pandas as pd
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.progress import TQDMProgressBar
+from pytorch_lightning.loggers import TensorBoardLogger
+import torch
+from torch.optim import AdamW
+from torch.utils.data import Dataset, DataLoader
+from transformers import T5ForConditionalGeneration
+from transformers import PreTrainedTokenizer, PreTrainedModel
+from transformers import T5TokenizerFast as T5Tokenizer
 
+import Utils.helperFunctions as helperFunctions
 
-# the parameters passed to the tokenizer when encoding text
-encoding_parameters = {
-    "padding": "max_length",
-    "truncation": True,
-    "max_length": 512,
-    "add_special_tokens": True,
-}
+SEED = 1234
+def reset_environment(reset_seed=True, seed=SEED):
+    """
+        Clears the memory and resets the environment seed
+    """
+    torch.cuda.empty_cache()
+    gc.collect()
+    if reset_seed:
+        pl.seed_everything(seed)
+        os.environ['PYTHONHASHSEED'] = str(seed)
+        random.seed(seed)
+        np.random.seed(seed)
 
-# the parameters passed to the model when decoding text
-decoding_parameters = {
-}
+class ExperimentParameters(dict):
+    """
+        A class for serializing/deserializing deep learning experiment parameters.
+        It's basically a wrapper class for JSON objects.
+    """
+    def __init__(self):
+        super().__init__(self)
 
-other_parameters = {
-    # the batch size at which the data is loaded into memory
-    "data_module_batch_size": 4,
+    def from_json(self, filepath: str):
+        """
+            Loads the experiment parameters from a JSON file.
+        """
+        params = helperFunctions.read_json(filepath)
+        super().__init__(self, params)
 
-    # the number of cpu cores in the current machine
-    "cpu_cores": multiprocessing.cpu_count(),
-    
-    # saves the last recent 'n' epochs
-    "save_last_n_epochs": 3,
+    def to_json(self, filepath: str):
+        """
+            Saves the experiment parameters to a JSON file.
+        """
+        helperFunctions.save_as_json(self, filepath, "")
 
-}
-
-optimizer_parameters = {
-    # the fixed learning rate for the model
-    "fixed_learning_rate": 0.0001,
-}
-
-arguments = {
-    "encoding": encoding_parameters,
-    "decoding": decoding_parameters,
-    "optimizer": optimizer_parameters,
-    "other": other_parameters,
-}
+    def __str__(self):
+        return json.dumps(self, indent=2)
 
 #@title LightningDataset
 class LightningDataset(Dataset):
@@ -71,7 +69,7 @@ class LightningDataset(Dataset):
         self,
         data: pd.DataFrame,
         tokenizer: PreTrainedTokenizer,
-        args: Dict[str, Dict],
+        params: ExperimentParameters,
     ):
         """
         Initiates a PyTorch Dataset Module for input data
@@ -80,11 +78,11 @@ class LightningDataset(Dataset):
         ----------
             data : input pandas dataframe. Dataframe must have 2 column: "source_text" and "target_text"
             tokenizer : a PreTrainedTokenizer from hugging face.
-            args : a nested dictionary that contains all the parameters for encoding/decoding 
+            params : a nested dictionary that contains all the parameters for encoding/decoding 
         """
         self.data = data
         self.tokenizer = tokenizer
-        self.encoding_args = args['encoding']
+        self.encoding_params = params['encoding']
 
     def __len__(self) -> int:
         """ returns the length of data """
@@ -97,10 +95,10 @@ class LightningDataset(Dataset):
 
         encoded_source = self.tokenizer(
             row.source_text,
-            max_length=self.encoding_args['max_length'],
-            padding=self.encoding_args['padding'],
-            truncation=self.encoding_args['truncation'],
-            add_special_tokens=self.encoding_args['add_special_tokens'],
+            max_length=self.encoding_params['max_length'],
+            padding=self.encoding_params['padding'],
+            truncation=self.encoding_params['truncation'],
+            add_special_tokens=self.encoding_params['add_special_tokens'],
 
             return_attention_mask=True,
             return_tensors="pt",
@@ -108,10 +106,10 @@ class LightningDataset(Dataset):
 
         encoded_target = self.tokenizer(
             row.target_text,
-            max_length=self.encoding_args['max_length'],
-            padding=self.encoding_args['padding'],
-            truncation=self.encoding_args['truncation'],
-            add_special_tokens=self.encoding_args['add_special_tokens'],
+            max_length=self.encoding_params['max_length'],
+            padding=self.encoding_params['padding'],
+            truncation=self.encoding_params['truncation'],
+            add_special_tokens=self.encoding_params['add_special_tokens'],
 
             return_attention_mask=True,
             return_tensors="pt",
@@ -139,17 +137,20 @@ class LightningDataModule(pl.LightningDataModule):
         test_df: pd.DataFrame,
         eval_df: pd.DataFrame,
         tokenizer: PreTrainedTokenizer,
-        args: Dict[str, Dict],
+        params: ExperimentParameters,
     ):
         """
         initiates a PyTorch Lightning Data Module
 
         Parameters
         ----------
-            train_df : training dataframe. Dataframe must contain 2 columns: "source_text" and "target_text"
-            test_df : validation dataframe. Dataframe must contain 2 columns: "source_text" and "target_text"
+            train_df : the training dataframe. 
+            test_df : the test dataframe. 
+            eval_df : the validation dataframe. 
             tokenizer: a PreTrainedTokenizer object from hugging face
             batch_size: batch size of loading the data.
+
+            The dataframes must have only two columns: "source_text" and "target_text"
         """
         super().__init__()
 
@@ -157,15 +158,15 @@ class LightningDataModule(pl.LightningDataModule):
         self.test_df = test_df
         self.eval_df = eval_df
         self.tokenizer = tokenizer
-        self.args = args
+        self.params = params
 
-        self.num_workers = arguments['other']['cpu_cores']
-        self.batch_size = arguments['other']['data_module_batch_size']
+        self.num_workers = params['other']['cpu_cores']
+        self.batch_size = params['other']['data_module_batch_size']
 
     def setup(self, stage=None):
-        self.train_dataset = LightningDataset(self.train_df, self.tokenizer, self.args)
-        self.test_dataset = LightningDataset(self.test_df, self.tokenizer, self.args)
-        self.val_dataset = LightningDataset(self.eval_df, self.tokenizer, self.args)
+        self.train_dataset = LightningDataset(self.train_df, self.tokenizer, self.params)
+        self.test_dataset = LightningDataset(self.test_df, self.tokenizer, self.params)
+        self.val_dataset = LightningDataset(self.eval_df, self.tokenizer, self.params)
 
     def train_dataloader(self):
         """ training dataloader """
@@ -196,36 +197,39 @@ class LightningDataModule(pl.LightningDataModule):
 
 #@title LightningModel
 class LightningModel(pl.LightningModule):
-    """ PyTorch Lightning Model class"""
+    """ PyTorch Lightning Model"""
 
     def __init__(
         self,
         tokenizer,
         model,
         checkpoint_name: str,
-        checkpoints_dir: str,
-        args: Dict[str, Dict],
+        params: ExperimentParameters,
     ):
         """
-        initiates a PyTorch Lightning Model
-        Args:
-            tokenizer : T5/MT5/ByT5 tokenizer
-            model : T5/MT5/ByT5 model
+            Initializes the PyTorch Lightning Model
+
+            Parameters
+            ----------
+            tokenizer : the T5 tokenizer, loaded from hugging face.
+            model : the T5 model, loaded from hugging face.
             checkpoints_dir : output directory to save model checkpoints.
+            checkpoint_name : the name of the model checkpoint
+            params : the experiment parameters 
         """
         super().__init__()
         self.model = model
         self.checkpoint_name = checkpoint_name
         self.tokenizer = tokenizer
-        self.args = args
-        self.save_last_n_epochs = args['other']['save_last_n_epochs']
+        self.params = params
+
+        self.save_last_n_epochs = params['other']['save_last_n_epochs']
         self.saved_epochs = []
 
         self.average_training_loss = None
         self.average_validation_loss = None
 
-        self.checkpoints_dir = checkpoints_dir
-        self.checkpoints_dir = os.path.join(checkpoints_dir, checkpoint_name)
+        self.checkpoints_dir = f"{self.params['general']['output_dir']}/{self.checkpoint_name}/"
 
         # gets the next experiment version
         self.experiment_version = list(
@@ -238,69 +242,54 @@ class LightningModel(pl.LightningModule):
         self.checkpoints_dir = os.path.join(self.checkpoints_dir, f"version_{self.experiment_version}/")
 
     def forward(self, input_ids, attention_mask, decoder_attention_mask, labels=None):
-        """ forward step """
+        """ Forward step """
         output = self.model(
             input_ids,
             attention_mask=attention_mask,
-            labels=labels,
             decoder_attention_mask=decoder_attention_mask,
+            labels=labels,
         )
 
         return output.loss, output.logits
 
     def training_step(self, batch, batch_size):
-        """ training step """
-        input_ids = batch["source_text_input_ids"]
-        attention_mask = batch["source_text_attention_mask"]
-        labels = batch["labels"]
-        labels_attention_mask = batch["labels_attention_mask"]
-
+        """ Training step """
         loss, outputs = self(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            decoder_attention_mask=labels_attention_mask,
-            labels=labels,
+            input_ids=batch["source_text_input_ids"],
+            attention_mask=batch["source_text_attention_mask"],
+            decoder_attention_mask=batch["labels_attention_mask"],
+            labels=batch["labels"],
         )
 
         self.log(
-            "train_loss", loss, prog_bar=True, logger=True, on_epoch=True, on_step=True
+            "Loss/train", loss, prog_bar=True, logger=True, on_epoch=True, on_step=True
         )
         return loss
 
     def validation_step(self, batch, batch_size):
-        """ validation step """
-        input_ids = batch["source_text_input_ids"]
-        attention_mask = batch["source_text_attention_mask"]
-        labels = batch["labels"]
-        labels_attention_mask = batch["labels_attention_mask"]
-
+        """ Validation step """
         loss, outputs = self(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            decoder_attention_mask=labels_attention_mask,
-            labels=labels,
+            input_ids=batch["source_text_input_ids"],
+            attention_mask=batch["source_text_attention_mask"],
+            decoder_attention_mask=batch["labels_attention_mask"],
+            labels=batch["labels"],
         )
 
         self.log(
-            "val_loss", loss, prog_bar=True, logger=True, on_epoch=True, on_step=True
+            "Loss/validation", loss, prog_bar=True, logger=True, on_epoch=True, on_step=True
         )
         return loss
 
     def test_step(self, batch, batch_size):
-        """ test step """
-        input_ids = batch["source_text_input_ids"]
-        attention_mask = batch["source_text_attention_mask"]
-        labels = batch["labels"]
-        labels_attention_mask = batch["labels_attention_mask"]
-
+        """ Test step """
         loss, outputs = self(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            decoder_attention_mask=labels_attention_mask,
-            labels=labels,
+            input_ids=batch["source_text_input_ids"],
+            attention_mask=batch["source_text_attention_mask"],
+            decoder_attention_mask=batch["labels_attention_mask"],
+            labels=batch["labels"],
         )
 
-        self.log("test_loss", loss, prog_bar=True, logger=True,)
+        self.log("Loss/test", loss, prog_bar=True, logger=True,)
         return loss
 
     def configure_optimizers(self):
@@ -321,7 +310,7 @@ class LightningModel(pl.LightningModule):
         # this is the old optimizer
         return AdamW(
             self.parameters(), 
-            lr=self.args['optimizer']['fixed_learning_rate']
+            lr=self.params['optimizer']['fixed_learning_rate']
         )
 
     def training_epoch_end(self, training_step_outputs):
@@ -368,111 +357,29 @@ class LightningModel(pl.LightningModule):
 class EasyT5:
     """ Custom class for fine-tunning/training T5 models"""
 
-    def __init__(self, checkpoint_name: str, checkpoints_dir: str, args: Dict[str, Dict]):
-        """ Initiates the EasyT5 class """
-        self.checkpoints_dir = checkpoints_dir
-        self.checkpoint_name = checkpoint_name
+    def __init__(self, params: ExperimentParameters):
+        """ Initializes the EasyT5 class """
         self.trainer = None
         self.callbacks = [TQDMProgressBar(refresh_rate=5)]
-        self.args = args
 
-    def from_pretrained(self, model_name: str) -> None:
-        """
-            Loads T5 Model model for fine-tunning/training
-
-            Parameters
-            ----------
-                model_name: exact model architecture name. Ex: "t5-base" or "t5-large".
-        """
-        self.tokenizer = T5Tokenizer.from_pretrained(f"{model_name}")
-        self.model = T5ForConditionalGeneration.from_pretrained(
-            f"{model_name}",
-            return_dict=True
-        )
-
-    def train(
+        self.params = params
+        self.checkpoint_name = params['model']['checkpoint_name']
+ 
+    def from_pretrained(
         self,
-        train_df: pd.DataFrame,
-        test_df: pd.DataFrame,
-        eval_df: pd.DataFrame,
-        max_epochs: int = 5,
-        use_gpu: bool = True,
-        early_stopping_patience_epochs: int = 0,  # 0 to disable early stopping feature
-        precision=32,
-        logger="default",
-    ):
+        tokenizer_class: PreTrainedTokenizer,
+        model_class: PreTrainedModel,
+        return_dict: bool=True,
+        use_gpu: bool=True,
+        fp16: bool=True) -> None:
         """
-            trains T5/MT5 model on custom dataset
-            Parameters
-            ----------
-                train_df (pd.DataFrame): training datarame. Dataframe must have 2 column --> "source_text" and "target_text"
-                test_df ([type], optional): test datarame. Dataframe must have 2 column --> "source_text" and "target_text"
-                eval_df ([type], optional): validation datarame. Dataframe must have 2 column --> "source_text" and "target_text"
-                max_epochs (int, optional): max number of epochs. Defaults to 5.
-                use_gpu (bool, optional): if True, model uses gpu for training. Defaults to True.
-                early_stopping_patience_epochs (int, optional): monitors val_loss on epoch end and stops training, if val_loss does not improve after the specied number of epochs. set 0 to disable early stopping. Defaults to 0 (disabled)
-                precision (int, optional): sets precision training - Double precision (64), full precision (32) or half precision (16). Defaults to 32.
-                logger (pytorch_lightning.loggers) : any logger supported by PyTorch Lightning. Defaults to "default". If "default", pytorch lightning default logger is used.
+            loads a model (from a local folder or from HF) for training/fine-tuning/evaluating/inference
         """
-        self.data_module = LightningDataModule(
-            train_df,
-            test_df,
-            eval_df,
-            self.tokenizer,
-            self.args
+        self.tokenizer = tokenizer_class.from_pretrained(self.checkpoint_name)
+        self.model = model_class.from_pretrained(
+            self.checkpoint_name, 
+            return_dict=return_dict # set this to false during inference
         )
-
-        self.T5Model = LightningModel(
-            tokenizer=self.tokenizer,
-            model=self.model,
-            checkpoint_name=self.checkpoint_name,
-            checkpoints_dir=self.checkpoints_dir,
-            args=self.args,
-        )
-
-        # add callbacks for early stopping
-        if early_stopping_patience_epochs > 0:
-            early_stop_callback = EarlyStopping(
-                monitor="val_loss",
-                min_delta=0.01,
-                patience=early_stopping_patience_epochs,
-                verbose=True,
-                mode="min",
-            )
-            self.callbacks.append(early_stop_callback)
-
-        # add gpu support
-        gpus = 1 if use_gpu else 0
-
-        # add logger
-        loggers = True if logger == "default" else logger
-
-        # prepare trainer
-        self.trainer = pl.Trainer(
-            logger=loggers,
-            callbacks=self.callbacks,
-            max_epochs=max_epochs,
-            gpus=gpus,
-            precision=precision,
-            log_every_n_steps=1,
-        )
-
-        # fit trainer
-        self.trainer.fit(self.T5Model, self.data_module)
-
-    def load_model(
-        self,
-        model_dir: str = "outputs",
-        use_gpu: bool = False,
-        ):
-        """
-        loads a checkpoint for inferencing/prediction
-        Args:
-            model_dir (str, optional): path to model directory. Defaults to "outputs".
-            use_gpu (bool, optional): if True, model uses gpu for inferencing/prediction. Defaults to True.
-        """
-        self.model = T5ForConditionalGeneration.from_pretrained(f"{model_dir}")
-        self.tokenizer = T5Tokenizer.from_pretrained(f"{model_dir}")
 
         if use_gpu:
             if torch.cuda.is_available():
@@ -484,126 +391,247 @@ class EasyT5:
 
         self.model = self.model.to(self.device)
 
-    def predict(
+        if fp16:
+            self.model = self.model.half()
+
+    def train(
         self,
-        source_text: str,
-        max_length: int = 512,
-        num_return_sequences: int = 1,
-        num_beams: int = 2,
-        top_k: int = 50,
-        top_p: float = 0.95,
-        do_sample: bool = True,
-        repetition_penalty: float = 2.5,
-        length_penalty: float = 1.0,
-        early_stopping: bool = True,
-        skip_special_tokens: bool = True,
-        clean_up_tokenization_spaces: bool = True,
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        eval_df: pd.DataFrame,
+        logger="default",
+        accelerator: str='gpu',
     ):
         """
-        generates prediction for T5/MT5 model
-        Args:
-            source_text (str): any text for generating predictions
-            max_length (int, optional): max token length of prediction. Defaults to 512.
-            num_return_sequences (int, optional): number of predictions to be returned. Defaults to 1.
-            num_beams (int, optional): number of beams. Defaults to 2.
-            top_k (int, optional): Defaults to 50.
-            top_p (float, optional): Defaults to 0.95.
-            do_sample (bool, optional): Defaults to True.
-            repetition_penalty (float, optional): Defaults to 2.5.
-            length_penalty (float, optional): Defaults to 1.0.
-            early_stopping (bool, optional): Defaults to True.
-            skip_special_tokens (bool, optional): Defaults to True.
-            clean_up_tokenization_spaces (bool, optional): Defaults to True.
-        Returns:
-            list[str]: returns predictions
+            Trains the model on custom a dataset
+            Parameters
+            ----------
+            train_df (pd.DataFrame): the training dataframe. 
+            test_df ([type], optional): the test dataframe. 
+            eval_df ([type], optional): the validation dataframe. 
+            accelerator (str, optional): which accelerator to use when training the model. Defaults to 'gpu'.
+            logger (pytorch_lightning.loggers) : any logger supported by PyTorch Lightning. Defaults to "default". If "default", pytorch lightning default logger is used.
+
+            The dataframes must have only two columns: "source_text" and "target_text"
+        """
+        self.data_module = LightningDataModule(
+            train_df,
+            test_df,
+            eval_df,
+            self.tokenizer,
+        )
+
+        self.lightning_model = LightningModel(
+            tokenizer=self.tokenizer,
+            model=self.model,
+            checkpoint_name=self.checkpoint_name,
+        )
+
+        # add callbacks for early stopping
+        if self.params['trainer']['early_stopping_patience_epochs'] > 0:
+            early_stop_callback = EarlyStopping(
+                monitor="val_loss",
+                min_delta=self.params['trainer']['early_stopping_min_delta'],
+                patience=self.params['trainer']['early_stopping_patience_epochs'],
+                verbose=True,
+                mode="min",
+            )
+            self.callbacks.append(early_stop_callback)
+
+        # add logger
+        loggers = True if logger == "default" else logger
+
+        # prepare trainer
+        self.trainer = pl.Trainer(
+            logger=loggers,
+            callbacks=self.callbacks,
+            max_epochs=self.params['trainer']['max_epochs'],
+            precision=self.params['trainer']['precision'],
+            accelerator=accelerator,
+            log_every_n_steps=1,
+        )
+
+        # fit trainer
+        self.trainer.fit(self.lightning_model, self.data_module)
+
+    def predict(self, source_text: str) -> List[str]:
+        """
+            Generates predictions
+            Parameters
+            ----------
+                source_text (str): any text for generating predictions
+
+            Returns
+            -------
+                list[str]: returns the predictions
         """
         input_ids = self.tokenizer.encode(
             source_text, return_tensors="pt", add_special_tokens=True
         )
+
         input_ids = input_ids.to(self.device)
         generated_ids = self.model.generate(
             input_ids=input_ids,
-            num_beams=num_beams,
-            max_length=max_length,
-            repetition_penalty=repetition_penalty,
-            length_penalty=length_penalty,
-            early_stopping=early_stopping,
-            top_p=top_p,
-            top_k=top_k,
-            num_return_sequences=num_return_sequences,
+            num_beams=self.params['generator']['num_beams'],
+            max_length=self.params['generator']['max_length'],
+            repetition_penalty=self.params['generator']['repetition_penalty'],
+            length_penalty=self.params['generator']['length_penalty'],
+            early_stopping=self.params['generator']['early_stopping'],
+            top_p=self.params['generator']['top_p'],
+            top_k=self.params['generator']['top_k'],
+            num_return_sequences=self.params['generator']['num_return_sequences'],
         )
         preds = [
             self.tokenizer.decode(
                 g,
-                skip_special_tokens=skip_special_tokens,
-                clean_up_tokenization_spaces=clean_up_tokenization_spaces,
+                skip_special_tokens=self.params['generator']['skip_special_tokens'],
+                clean_up_tokenization_spaces=self.params['generator']['clean_up_tokenization_spaces'],
             )
             for g in generated_ids
         ]
         return preds
 
-    def predict_multiple(
-        self,
-        source_text: List[str],
-        max_length: int = 256,
-        num_return_sequences: int = 1,
-        num_beams: int = 2,
-        top_k: int = 50,
-        top_p: float = 0.95,
-        do_sample: bool = True,
-        repetition_penalty: float = 2.5,
-        length_penalty: float = 1.0,
-        early_stopping: bool = True,
-        skip_special_tokens: bool = True,
-        clean_up_tokenization_spaces: bool = True,
-    ):
+    def predict_multiple(self, source_text: List[str]) -> List[str]:
+        """
+            Predict multiple samples at once.
+        """
         input_ids = self.tokenizer(
             source_text, 
             return_tensors="pt",
-            add_special_tokens=True,
-            padding='max_length',
-            max_length=max_length,
-            truncation=True
+
+            padding=self.params['encoder']['padding'],
+            truncation=self.params['encoder']['truncation'],
+            add_special_tokens=self.params['encoder']['add_special_tokens'],
         )['input_ids']
 
         input_ids = input_ids.to(self.device)
 
         generated_samples = self.model.generate(
             input_ids=input_ids,
-            num_beams=num_beams,
-            max_length=max_length,
-            repetition_penalty=repetition_penalty,
-            length_penalty=length_penalty,
-            early_stopping=early_stopping,
-            top_p=top_p,
-            top_k=top_k,
-            num_return_sequences=num_return_sequences,
+            num_beams=self.params['generator']['num_beams'],
+            max_length=self.params['generator']['max_length'],
+            repetition_penalty=self.params['generator']['repetition_penalty'],
+            length_penalty=self.params['generator']['length_penalty'],
+            early_stopping=self.params['generator']['early_stopping'],
+            top_p=self.params['generator']['top_p'],
+            top_k=self.params['generator']['top_k'],
+            num_return_sequences=self.params['generator']['num_return_sequences'],
         )
 
-        return [self.tokenizer.decode(
-                g, 
-                skip_special_tokens=skip_special_tokens, 
-                clean_up_tokenization_spaces=clean_up_tokenization_spaces) 
-            for g in generated_samples
+        return [
+            self.tokenizer.decode(
+                gs, 
+                skip_special_tokens=self.params['generator']['skip_special_tokens'], 
+                clean_up_tokenization_spaces=self.params['generator']['clean_up_tokenization_spaces']
+            ) for gs in generated_samples
         ]
 
-    def batch_predict(self, batch_size: int, sequences: List[str], **kwargs):
+    def batch_predict(self, batch_size: int, sequences: List[str]) -> List[str]:
+        """
+            Computes the predictions on batches and then concatenates.
+        """
         output = []
         n_steps = (len(sequences)//batch_size)
+
+        # divide the input into batches and predict each batch on it's own
         for i in range(0, n_steps*batch_size, batch_size):
-            output += self.predict_multiple(
-                sequences[i:i+batch_size], 
-                **kwargs)
-        output += self.predict_multiple(
-          sequences[n_steps*batch_size:], 
-          **kwargs
-        )
+            output += self.predict_multiple(sequences[i:i+batch_size])
+
+        # add any leftover samples to a separate batch
+        output += self.predict_multiple(sequences[n_steps*batch_size:])
+
+        # return all concatenated predictions
         return output
+
+
+def main1():
+    parameters = ExperimentParameters()
+    parameters['trainer'] = {
+        "batch_size": 8,
+        "max_epochs": 5,
+        "precision": 32,
+        "early_stopping_patience_epochs": 0,  # 0 to disable early stopping feature
+        "early_stopping_min_delta": 0.01,
+    }
+
+    parameters['general'] = {
+        "source_max_token_len": 512,
+        "target_max_token_len": 512,
+        "output_dir":"",
+        'seed':SEED
+    }
+
+    parameters['encoder'] = {
+        "padding":"max_length",
+        "truncation":True,
+        "add_special_tokens": True,
+    }
+
+    parameters['dataset_loader'] = {
+        "batch_size": 4,
+        "num_workers": 2,
+    }
+
+    parameters['model'] = {
+        "checkpoint_name":"",
+        "save_every_epoch": True,
+        "learning_rate": 1e-4,
+    }
+
+    parameters['generator'] = {
+        "num_beams": 2,
+        "max_length": 512,
+        "repetition_penalty": 2.5,
+        "length_penalty": 1.0,
+        "early_stopping": True,
+        "top_p": 0.95,
+        "top_k": 50,
+        "num_return_sequences": 1,
+        "skip_special_tokens": True,
+        "clean_up_tokenization_spaces": True,
+    }
 
 
 def main():
     # @title Train The Model
     reset_environment()
+
+    # the parameters passed to the tokenizer when encoding text
+    encoding_parameters = {
+        "padding": "max_length",
+        "truncation": True,
+        "max_length": 512,
+        "add_special_tokens": True,
+    }
+
+    # the parameters passed to the model when decoding text
+    decoding_parameters = {
+    }
+
+    other_parameters = {
+        # the batch size at which the data is loaded into memory
+        "data_module_batch_size": 4,
+
+        # the number of cpu cores in the current machine
+        "cpu_cores": multiprocessing.cpu_count(),
+        
+        # saves the last recent 'n' epochs
+        "save_last_n_epochs": 3,
+
+    }
+
+    optimizer_parameters = {
+        # the fixed learning rate for the model
+        "fixed_learning_rate": 0.0001,
+    }
+
+    arguments = {
+        "encoding": encoding_parameters,
+        "decoding": decoding_parameters,
+        "optimizer": optimizer_parameters,
+        "other": other_parameters,
+    }
+
 
     model = EasyT5(
         checkpoint_name=tensorboard_name,
