@@ -25,18 +25,25 @@ from transformers import T5TokenizerFast as T5Tokenizer
 
 import Utils.helperFunctions as helperFunctions
 
-SEED = 1234
-def reset_environment(reset_seed=True, seed=SEED):
+def reset_environment(reset_seed: bool, seed: int):
     """
-        Clears the memory and resets the environment seed
+        Clears the memory and resets the environment seed.
+
+        Parameters
+        ----------
+        reset_seed : whether to reset the environment seed or not
+        seed : the seed value. Should be an integer in the range [min(np.uint32), max(np.uint32))
     """
+    # empty the cuda cache
     torch.cuda.empty_cache()
+
+    # force the python garbage collector to clear unused memory now
     gc.collect()
+
+    # reset the seed
     if reset_seed:
         pl.seed_everything(seed)
         os.environ['PYTHONHASHSEED'] = str(seed)
-        random.seed(seed)
-        np.random.seed(seed)
 
 class ExperimentParameters(dict):
     """
@@ -62,7 +69,6 @@ class ExperimentParameters(dict):
     def __str__(self):
         return json.dumps(self, indent=2)
 
-#@title LightningDataset
 class LightningDataset(Dataset):
     """  PyTorch Dataset class  """
     def __init__(
@@ -82,7 +88,14 @@ class LightningDataset(Dataset):
         """
         self.data = data
         self.tokenizer = tokenizer
-        self.encoding_params = params['encoding']
+
+        # since those parameters are used in every __getitem__ call,
+        # It's better to store the parameters in the class for faster extraction
+        # as dictionaries are slightly slower 
+        self.tokenizer_max_length = params['encoding']['max_length']
+        self.tokenizer_padding = params['encoding']['padding']
+        self.tokenizer_truncation = params['encoding']['truncation']
+        self.tokenizer_add_special_tokens = params['encoding']['add_special_tokens']
 
     def __len__(self) -> int:
         """ returns the length of data """
@@ -95,10 +108,10 @@ class LightningDataset(Dataset):
 
         encoded_source = self.tokenizer(
             row.source_text,
-            max_length=self.encoding_params['max_length'],
-            padding=self.encoding_params['padding'],
-            truncation=self.encoding_params['truncation'],
-            add_special_tokens=self.encoding_params['add_special_tokens'],
+            max_length=self.tokenizer_max_length,
+            padding=self.tokenizer_padding,
+            truncation=self.tokenizer_truncation,
+            add_special_tokens=self.tokenizer_add_special_tokens,
 
             return_attention_mask=True,
             return_tensors="pt",
@@ -106,10 +119,10 @@ class LightningDataset(Dataset):
 
         encoded_target = self.tokenizer(
             row.target_text,
-            max_length=self.encoding_params['max_length'],
-            padding=self.encoding_params['padding'],
-            truncation=self.encoding_params['truncation'],
-            add_special_tokens=self.encoding_params['add_special_tokens'],
+            max_length=self.tokenizer_max_length,
+            padding=self.tokenizer_padding,
+            truncation=self.tokenizer_truncation,
+            add_special_tokens=self.tokenizer_add_special_tokens,
 
             return_attention_mask=True,
             return_tensors="pt",
@@ -127,7 +140,6 @@ class LightningDataset(Dataset):
             "labels_attention_mask": encoded_target["attention_mask"].flatten(),
         }
 
-#@title LightningDataModule
 class LightningDataModule(pl.LightningDataModule):
     """ PyTorch Lightning data class """
 
@@ -160,8 +172,8 @@ class LightningDataModule(pl.LightningDataModule):
         self.tokenizer = tokenizer
         self.params = params
 
-        self.num_workers = params['other']['cpu_cores']
-        self.batch_size = params['other']['data_module_batch_size']
+        self.num_workers = params['general']['cpu_cores']
+        self.batch_size = params['trainer']['batch_size']
 
     def setup(self, stage=None):
         self.train_dataset = LightningDataset(self.train_df, self.tokenizer, self.params)
@@ -195,7 +207,6 @@ class LightningDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
         )
 
-#@title LightningModel
 class LightningModel(pl.LightningModule):
     """ PyTorch Lightning Model"""
 
@@ -203,7 +214,6 @@ class LightningModel(pl.LightningModule):
         self,
         tokenizer,
         model,
-        checkpoint_name: str,
         params: ExperimentParameters,
     ):
         """
@@ -219,17 +229,17 @@ class LightningModel(pl.LightningModule):
         """
         super().__init__()
         self.model = model
-        self.checkpoint_name = checkpoint_name
+        self.tensorboard_name = params['general']['tensorboard_name']
         self.tokenizer = tokenizer
         self.params = params
 
-        self.save_last_n_epochs = params['other']['save_last_n_epochs']
+        self.save_last_n_epochs = params['trainer']['save_last_n_epochs']
         self.saved_epochs = []
 
         self.average_training_loss = None
         self.average_validation_loss = None
 
-        self.checkpoints_dir = f"{self.params['general']['output_dir']}/{self.checkpoint_name}/"
+        self.checkpoints_dir = f"{self.params['general']['output_dir']}/{self.tensorboard_name}/"
 
         # gets the next experiment version
         self.experiment_version = list(
@@ -310,7 +320,7 @@ class LightningModel(pl.LightningModule):
         # this is the old optimizer
         return AdamW(
             self.parameters(), 
-            lr=self.params['optimizer']['fixed_learning_rate']
+            lr=self.params['trainer']['fixed_learning_rate']
         )
 
     def training_epoch_end(self, training_step_outputs):
@@ -353,7 +363,6 @@ class LightningModel(pl.LightningModule):
             4,
         )
 
-#@title EasyT5 class
 class EasyT5:
     """ Custom class for fine-tunning/training T5 models"""
 
@@ -363,7 +372,7 @@ class EasyT5:
         self.callbacks = [TQDMProgressBar(refresh_rate=5)]
 
         self.params = params
-        self.checkpoint_name = params['model']['checkpoint_name']
+        self.checkpoint_name = params['general']['checkpoint_name']
  
     def from_pretrained(
         self,
@@ -371,7 +380,7 @@ class EasyT5:
         model_class: PreTrainedModel,
         return_dict: bool=True,
         use_gpu: bool=True,
-        fp16: bool=True) -> None:
+        fp16: bool=False) -> None:
         """
             loads a model (from a local folder or from HF) for training/fine-tuning/evaluating/inference
         """
@@ -430,11 +439,11 @@ class EasyT5:
         # add callbacks for early stopping
         if self.params['trainer']['early_stopping_patience_epochs'] > 0:
             early_stop_callback = EarlyStopping(
-                monitor="val_loss",
+                monitor=self.params['trainer']['early_stopping_monitor'],
                 min_delta=self.params['trainer']['early_stopping_min_delta'],
                 patience=self.params['trainer']['early_stopping_patience_epochs'],
+                mode=self.params['trainer']['early_stopping_mode'],
                 verbose=True,
-                mode="min",
             )
             self.callbacks.append(early_stop_callback)
 
@@ -454,12 +463,13 @@ class EasyT5:
         # fit trainer
         self.trainer.fit(self.lightning_model, self.data_module)
 
-    def predict(self, source_text: str) -> List[str]:
+    def predict(self, source_text: str, custom_params: ExperimentParameters=None) -> List[str]:
         """
             Generates predictions
             Parameters
             ----------
                 source_text (str): any text for generating predictions
+                custom_params : custom parameters for the output generation. The default is to use the parameters provided when the class was initialized.
 
             Returns
             -------
@@ -469,23 +479,26 @@ class EasyT5:
             source_text, return_tensors="pt", add_special_tokens=True
         )
 
+        params = self.params if custom_params == None else custom_params
+
         input_ids = input_ids.to(self.device)
         generated_ids = self.model.generate(
             input_ids=input_ids,
-            num_beams=self.params['generator']['num_beams'],
-            max_length=self.params['generator']['max_length'],
-            repetition_penalty=self.params['generator']['repetition_penalty'],
-            length_penalty=self.params['generator']['length_penalty'],
-            early_stopping=self.params['generator']['early_stopping'],
-            top_p=self.params['generator']['top_p'],
-            top_k=self.params['generator']['top_k'],
-            num_return_sequences=self.params['generator']['num_return_sequences'],
+            num_beams=params['generator']['num_beams'],
+            max_length=params['generator']['max_length'],
+            repetition_penalty=params['generator']['repetition_penalty'],
+            length_penalty=params['generator']['length_penalty'],
+            early_stopping=params['generator']['early_stopping'],
+            top_p=params['generator']['top_p'],
+            top_k=params['generator']['top_k'],
+            num_return_sequences=params['generator']['num_return_sequences'],
         )
+
         preds = [
             self.tokenizer.decode(
                 g,
-                skip_special_tokens=self.params['generator']['skip_special_tokens'],
-                clean_up_tokenization_spaces=self.params['generator']['clean_up_tokenization_spaces'],
+                skip_special_tokens=params['generator']['skip_special_tokens'],
+                clean_up_tokenization_spaces=params['generator']['clean_up_tokenization_spaces'],
             )
             for g in generated_ids
         ]
@@ -543,125 +556,119 @@ class EasyT5:
         # return all concatenated predictions
         return output
 
-
-def main1():
+def main():
+    SEED = 1234
     parameters = ExperimentParameters()
+
+    # parameters related to the training process
+    # and the PyTorch Lightning trainer
     parameters['trainer'] = {
-        "batch_size": 8,
-        "max_epochs": 5,
-        "precision": 32,
-        "early_stopping_patience_epochs": 0,  # 0 to disable early stopping feature
+        # saves the last recent 'n' epochs
+        "save_last_n_epochs": 3,
+        # the fixed learning rate for the model
+        "fixed_learning_rate": 1e-4,
+        # the monitor of the early stopping
+        "early_stopping_monitor": "val_loss",
+        # the minimum delta between the epochs to apply early stopping
         "early_stopping_min_delta": 0.01,
+        # 0 to disable early stopping feature
+        "early_stopping_patience_epochs": 0,
+        # the mode of the early stopping criteria
+        "early_stopping_mode": "min",
+        # the maximum number of epochs to train/fine-tune the model on
+        "max_epochs": 5,
+        # the floating point numbers precision
+        "precision": 32,
+        # the training batch size 
+        # the batch size at which the data is loaded into memory
+        "batch_size": 8,
     }
 
+    # general parameters about the working environment
     parameters['general'] = {
-        "source_max_token_len": 512,
-        "target_max_token_len": 512,
+        # the output directory
         "output_dir":"",
-        'seed':SEED
-    }
-
-    parameters['encoder'] = {
-        "padding":"max_length",
-        "truncation":True,
-        "add_special_tokens": True,
-    }
-
-    parameters['dataset_loader'] = {
-        "batch_size": 4,
-        "num_workers": 2,
-    }
-
-    parameters['model'] = {
+        # the name/path of the checkpoint to be loaded from Hugging face
+        # or from the local disk
         "checkpoint_name":"",
-        "save_every_epoch": True,
-        "learning_rate": 1e-4,
+        # the name that will appear on tensorboard
+        "tensorboard_name": "",
+        # the number of cpu cores in the current machine
+        "cpu_cores": multiprocessing.cpu_count(),
+        # the environment seed
+        'seed':SEED,
     }
 
-    parameters['generator'] = {
-        "num_beams": 2,
+    # the parameters passed to the tokenizer when encoding text
+    parameters['encoder'] = {
+        # the padding method for the input sequences
+        "padding":"max_length",
+        # whether to truncate long sequences or not
+        "truncation":True,
+        # whether to add special tokens in the input sequences or not
+        "add_special_tokens": True,
+        # the maximum length of the input sequence
         "max_length": 512,
+    }
+
+    # the parameters passed to the model when generating text
+    parameters['generator'] = {
+        # the number of beams used in the beam search (also known as beam width)
+        "num_beams": 2,
+        # the maximum length of the generated sequences
+        "max_length": 512,
+        # the repetition penalty added when the model repeats words
         "repetition_penalty": 2.5,
+        # the penalty aded when the model generates lengthly sequences
         "length_penalty": 1.0,
+        # whether to stop the beam search when at least `num_beams` sentences are finished per batch or not.
         "early_stopping": True,
+        # if set to float < 1, only the most probable tokens with probabilities that add up to `top_p` or higher are kept for generation.
         "top_p": 0.95,
+        # the number of highest probability vocabulary tokens to keep for top-k-filtering.
         "top_k": 50,
+        # the number of returned sequences
         "num_return_sequences": 1,
+        # whether to skip special tokens when generating or not
         "skip_special_tokens": True,
+        # whether to clean all tokenization spaces before returning the output or not
         "clean_up_tokenization_spaces": True,
     }
 
+    ################ model training ################
+    # NOT TESTED YET :(
+    reset_environment(seed=parameters['general']['seed'])
 
-def main():
-    # @title Train The Model
-    reset_environment()
+    # loading the model
+    model = EasyT5(parameters)
+    model.from_pretrained(T5ForConditionalGeneration, T5Tokenizer)
 
-    # the parameters passed to the tokenizer when encoding text
-    encoding_parameters = {
-        "padding": "max_length",
-        "truncation": True,
-        "max_length": 512,
-        "add_special_tokens": True,
-    }
-
-    # the parameters passed to the model when decoding text
-    decoding_parameters = {
-    }
-
-    other_parameters = {
-        # the batch size at which the data is loaded into memory
-        "data_module_batch_size": 4,
-
-        # the number of cpu cores in the current machine
-        "cpu_cores": multiprocessing.cpu_count(),
-        
-        # saves the last recent 'n' epochs
-        "save_last_n_epochs": 3,
-
-    }
-
-    optimizer_parameters = {
-        # the fixed learning rate for the model
-        "fixed_learning_rate": 0.0001,
-    }
-
-    arguments = {
-        "encoding": encoding_parameters,
-        "decoding": decoding_parameters,
-        "optimizer": optimizer_parameters,
-        "other": other_parameters,
-    }
-
-
-    model = EasyT5(
-        checkpoint_name=tensorboard_name,
-        output_dir=LOGS_DIR, 
-        learning_rate=1e-4
-    )
-
+    # setting up the tensorboard logger
+    TENSORBOARD_LOGS = "path_to_tensorboard_logs_dir"
     logger = TensorBoardLogger(
         TENSORBOARD_LOGS, 
-        name=tensorboard_name
+        name=parameters['general']['tensorboard_name']
     )
 
-    model.from_pretrained(
-        model_name=model_checkpoint
-    )
+    # load the dataframes
+    preprocessed_train_df = None
+    preprocessed_test_df = None
+    preprocessed_eval_df = None
 
-        # train_df= train_df.sample(100, random_state=SEED),
-        # test_df = test_df.sample(100, random_state=SEED),
-        # eval_df = eval_df.sample(100, random_state=SEED),
+    # train the model
     model.train(
-        train_df= preprocessed_train_df,
-        test_df = preprocessed_test_df,
-        eval_df = preprocessed_eval_df,
-        source_max_token_len=256, 
-        target_max_token_len=64, 
-        batch_size=batch_size, 
-        max_epochs=max_epochs, 
-        early_stopping_patience_epochs=early_stopping_patience_epochs,
-        use_gpu=True,
+        train_df=preprocessed_train_df,
+        test_df=preprocessed_test_df,
+        eval_df=preprocessed_eval_df,
+        accelerator='gpu',
         logger=logger,
-        dataloader_num_workers=multiprocessing.cpu_count(),
     )
+    ################################################
 
+
+    ############### model inference ################
+    model = EasyT5(parameters)
+    model.from_pretrained(T5ForConditionalGeneration, T5Tokenizer, return_dict=False)
+    suggestion = model.predict("complete: I want to eat")[0]
+    print(suggestion)
+    ################################################
