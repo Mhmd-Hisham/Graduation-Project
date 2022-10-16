@@ -2,4 +2,5 @@
 *.pyc
 chatbot-env/*
 .vscode/*
-FineTuneing/T5/T5 Checkpoints/*
+FineTuning/T5/T5 Checkpoints/*
+FineTuning/T5/checkpoints/*
