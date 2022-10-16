@@ -668,7 +668,7 @@ def main():
 
     ############### model inference ################
     model = EasyT5(parameters)
-    model.from_pretrained(T5ForConditionalGeneration, T5Tokenizer, return_dict=False)
+    model.from_pretrained(T5Tokenizer, T5ForConditionalGeneration, return_dict=False)
     suggestion = model.predict("complete: I want to eat")[0]
     print(suggestion)
     ################################################
