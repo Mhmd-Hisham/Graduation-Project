@@ -58,7 +58,10 @@ class ExperimentParameters(dict):
             Loads the experiment parameters from a JSON file.
         """
         params = helperFunctions.read_json(filepath)
-        super().__init__(self, params)
+        super().__init__(self)
+        for k, v in params.items():
+            self[k] = v
+        return self
 
     def to_json(self, filepath: str):
         """
